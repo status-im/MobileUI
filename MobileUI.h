@@ -63,6 +63,7 @@ Q_SIGNALS:
     void navbarUpdated();
     void safeAreaUpdated();
     void screenUpdated();
+    void deepLinkActivated(const QString& url);
 
 public:
     MobileUI(QObject *parent = nullptr);

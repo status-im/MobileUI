@@ -581,3 +581,35 @@ float MobileUI::getSmartScaleFactor(float baseWidth, float baseDpi, float baseSc
 }
 
 /* ************************************************************************** */
+
+// Deep linking support
+
+void MobileUI::emitDeepLinkToQt(const QString& url)
+{
+    if (url.isEmpty()) return;
+
+    emit deepLinkActivated(url);
+}
+
+// static MobileUI* g_mobileUIInstance = nullptr;
+
+// void MobileUI::setInstance(MobileUI* instance)
+// {
+//     g_mobileUIInstance = instance;
+// }
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt(JNIEnv* /*env*/, jclass /*clazz*/, jstring url)
+{
+    cout << "Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt called" << endl;
+    cout << "url: " << QJniObject(url).toString().toStdString() << endl;
+    const QString deepLink = QJniObject(url).toString();
+    if (deepLink.isEmpty()) return;
+
+    // if (g_mobileUIInstance) {
+    //     g_mobileUIInstance->emitDeepLinkToQt(deepLink);
+    // }
+    MobileUI::emitDeepLinkToQt(deepLink);
+}
+
+/* ************************************************************************** */
