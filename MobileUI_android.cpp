@@ -568,3 +568,21 @@ float MobileUI::getSmartScaleFactor(float baseWidth, float baseDpi, float baseSc
 }
 
 /* ************************************************************************** */
+
+void MobileUI::openSystemSettings()
+{
+#ifdef Q_OS_ANDROID
+    QJniObject::callStaticMethod<void>(
+        "app/status/mobile/StatusQtActivity",
+        "openAppSettings",
+        "()V"
+    );
+#elif defined(Q_OS_IOS)
+    // iOS implementation
+    QUrl url(QStringLiteral("app-settings:"));
+    QDesktopServices::openUrl(url);
+#else
+    // Desktop - we shouldn't be here
+    qWarning() << "openSystemSettings not implemented for this platform";
+#endif
+}

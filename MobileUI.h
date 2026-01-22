@@ -202,6 +202,11 @@ public:
      * single Android application does, going back to the home screen...
      */
     Q_INVOKABLE static void backToHomeScreen();
+
+    /*!
+     * \brief Open system settings for the current application.
+     */
+    Q_INVOKABLE static void openSystemSettings();
 };
 
 /* ************************************************************************** */
