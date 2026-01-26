@@ -21,6 +21,7 @@ You can see it in action in the [MobileUI demo](https://github.com/emericg/Mobil
 - Set screen brightness
 - Trigger haptic feedback (vibration)
 - Android back button helper
+- Push notification permissions and local notifications (Android/iOS)
 
 ## Screenshots
 
@@ -84,6 +85,46 @@ Window {
         navbarTheme: MobileUI.Light
     }
 }
+```
+
+### Push notifications
+
+MobileUI exposes a `PushNotifications` singleton for permission checks and local notification helpers.
+
+```qml
+import MobileUI 1.0
+
+Connections {
+    target: PushNotifications
+    function onStatusChanged() {
+        console.log("push permission:", PushNotifications.status)
+    }
+}
+
+Component.onCompleted: {
+    if (PushNotifications.status === PushNotifications.Unknown) {
+        PushNotifications.request()
+    }
+}
+```
+
+Available API:
+- `PushNotifications.status` (`Unknown`, `Granted`, `Denied`)
+- `PushNotifications.token` (iOS only TODO: Android)
+- `PushNotifications.request()`
+- `PushNotifications.requestToken()` (iOS only TODO: Android)
+- `PushNotifications.openSettings()`
+- `PushNotifications.showNotification(title, message, identifier)`
+- `PushNotifications.clearNotifications(identifier)`
+
+### Android Maven helper
+
+MobileUI ships a small Android helper (Java) to handle permissions and local notifications.
+It is published to `mavenLocal` during Android builds.
+
+```bash
+cd android/qt6
+./gradlew publishToMavenLocal
 ```
 
 ## Caveats
