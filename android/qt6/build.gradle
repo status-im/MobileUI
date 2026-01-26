@@ -1,0 +1,67 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.8.0'
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
+
+group = 'im.status'
+version = '0.0.0-local'
+
+repositories {
+    google()
+    mavenCentral()
+}
+
+android {
+    namespace "im.status.mobileui"
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 28
+        targetSdk 35
+    }
+
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+        }
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ['src']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core:1.16.0'
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = group
+                artifactId = 'mobileui-android'
+                version = version
+            }
+        }
+        repositories {
+            mavenLocal()
+        }
+    }
+}

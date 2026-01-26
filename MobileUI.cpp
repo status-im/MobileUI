@@ -23,9 +23,11 @@
 
 #include "MobileUI.h"
 #include "MobileUI_private.h"
+#include "pushnotifications.h"
 
 #include <QGuiApplication>
 #include <QQmlEngine>
+#include <QJSEngine>
 #include <QScreen>
 
 /* ************************************************************************** */
@@ -55,6 +57,11 @@ void MobileUI::registerQML()
     qRegisterMetaType<MobileUI::ScreenOrientation>("MobileUI::ScreenOrientation");
 
     qmlRegisterType<MobileUI>("MobileUI", 1, 0, "MobileUI");
+    qmlRegisterSingletonType<PushNotifications>("MobileUI", 1, 0, "PushNotifications",
+        [](QQmlEngine*, QJSEngine*) -> QObject* {
+            static PushNotifications* instance = new PushNotifications();
+            return instance;
+        });
 }
 
 /* ************************************************************************** */
