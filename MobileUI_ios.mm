@@ -27,10 +27,20 @@
 #include <QScreen>
 #include <QWindow>
 #include <QTimer>
+#include <QByteArray>
 
 #include <objc/objc.h>
 #include <objc/message.h>
 #include <UIKit/UIKit.h>
+
+// Store the security scoped paths for the duration of the app
+static NSMutableDictionary<NSString*, NSURL*> *s_securityScopedPaths = nil;
+static NSMutableDictionary<NSString*, NSNumber*> *s_securityScopedPathCounts = nil;
+static NSObject *getSecurityScopedPathsLock()
+{
+    static NSObject *lock = [NSObject new];
+    return lock;
+}
 
 /* ************************************************************************** */
 
@@ -320,6 +330,77 @@ void MobileUIPrivate::vibrate()
 void MobileUIPrivate::backToHomeScreen()
 {
     return;
+}
+
+/* ************************************************************************** */
+
+bool MobileUIPrivate::startAccessingPath(const QString& filePath)
+{
+    if (filePath.isEmpty()) {
+        return false;
+    }
+    const QByteArray utf8Path = filePath.toUtf8();
+    NSString *pathString = [NSString stringWithUTF8String:utf8Path.constData()];
+    if (!pathString) {
+        return false;
+    }
+    @synchronized (getSecurityScopedPathsLock()) {
+        if (!s_securityScopedPaths) {
+            s_securityScopedPaths = [NSMutableDictionary new];
+        }
+        if (!s_securityScopedPathCounts) {
+            s_securityScopedPathCounts = [NSMutableDictionary new];
+        }
+        NSString *key = pathString;
+        NSNumber *count = [s_securityScopedPathCounts objectForKey:key];
+        if (count) {
+            [s_securityScopedPathCounts setObject:@(count.intValue + 1) forKey:key];
+            return true;
+        }
+
+        NSURL *url = [NSURL fileURLWithPath:pathString];
+        if (!url) {
+            return false;
+        }
+        BOOL ok = [url startAccessingSecurityScopedResource];
+        if (ok) {
+            [s_securityScopedPaths setObject:url forKey:key];
+            [s_securityScopedPathCounts setObject:@1 forKey:key];
+        }
+        return ok;
+    }
+}
+
+void MobileUIPrivate::stopAccessingPath(const QString& filePath)
+{
+    if (filePath.isEmpty()) {
+        return;
+    }
+    const QByteArray utf8Path = filePath.toUtf8();
+    NSString *key = [NSString stringWithUTF8String:utf8Path.constData()];
+    if (!key) {
+        return;
+    }
+    @synchronized (getSecurityScopedPathsLock()) {
+        if (!s_securityScopedPathCounts) {
+            return;
+        }
+        NSNumber *count = [s_securityScopedPathCounts objectForKey:key];
+        if (!count) {
+            return;
+        }
+        if (count.intValue > 1) {
+            [s_securityScopedPathCounts setObject:@(count.intValue - 1) forKey:key];
+            return;
+        }
+
+        NSURL *url = [s_securityScopedPaths objectForKey:key];
+        if (url) {
+            [url stopAccessingSecurityScopedResource];
+        }
+        [s_securityScopedPaths removeObjectForKey:key];
+        [s_securityScopedPathCounts removeObjectForKey:key];
+    }
 }
 
 /* ************************************************************************** */

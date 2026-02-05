@@ -27,6 +27,7 @@
 
 #include <QObject>
 #include <QColor>
+#include <QString>
 
 /* ************************************************************************** */
 
@@ -202,6 +203,40 @@ public:
      * single Android application does, going back to the home screen...
      */
     Q_INVOKABLE static void backToHomeScreen();
+
+    // Folder access ///////////////////////////////////////////////////////////
+    /*!
+     * \brief Start accessing a file or folder at the given path.
+     *
+     * On iOS this method is intended to start accessing a security-scoped
+     * resource for the given \a filePath, allowing the application to read or
+     * write outside of its sandbox using previously obtained bookmarks or URLs.
+     *
+     * On Android this method is a no-op and does not change the effective
+     * access permissions, but it is provided for API compatibility.
+     *
+     * \param filePath Absolute path to the file or directory that should be
+     *        made accessible.
+     * \return \c true if the access session was successfully started (or if no
+     *         action is required on the current platform), otherwise \c false.
+     */
+    Q_INVOKABLE static bool startAccessingPath(const QString& filePath);
+
+    /*!
+     * \brief Stop accessing a file or folder previously passed to
+     *        startAccessingPath().
+     *
+     * On iOS this should be called when the application no longer needs to
+     * access the security-scoped resource associated with \a filePath, in
+     * order to release the corresponding OS resources.
+     *
+     * On Android this method is a no-op and is provided only for API
+     * compatibility with iOS.
+     *
+     * \param filePath Absolute path to the file or directory for which access
+     *        should be stopped.
+     */
+    Q_INVOKABLE static void stopAccessingPath(const QString& filePath);
 };
 
 /* ************************************************************************** */

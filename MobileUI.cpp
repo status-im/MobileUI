@@ -237,3 +237,15 @@ void MobileUI::backToHomeScreen()
 }
 
 /* ************************************************************************** */
+
+bool MobileUI::startAccessingPath(const QString& filePath)
+{
+    return MobileUIPrivate::startAccessingPath(filePath);
+}
+
+void MobileUI::stopAccessingPath(const QString& filePath)
+{
+    MobileUIPrivate::stopAccessingPath(filePath);
+}
+
+/* ************************************************************************** */
