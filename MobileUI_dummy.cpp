@@ -110,6 +110,17 @@ void MobileUIPrivate::backToHomeScreen()
     return;
 }
 
+bool MobileUIPrivate::startAccessingPath(const QString& filePath)
+{
+    Q_UNUSED(filePath)
+    return true;
+}
+
+void MobileUIPrivate::stopAccessingPath(const QString& filePath)
+{
+    Q_UNUSED(filePath)
+}
+
 float MobileUI::getSmartScaleFactor(float baseWidth, float baseDpi, float baseScale)
 {
     Q_UNUSED(baseWidth);

@@ -74,6 +74,9 @@ public:
     static void vibrate();
 
     static void backToHomeScreen();
+
+    static bool startAccessingPath(const QString& filePath);
+    static void stopAccessingPath(const QString& filePath);
 };
 
 /* ************************************************************************** */
