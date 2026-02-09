@@ -121,6 +121,11 @@ void MobileUIPrivate::stopAccessingPath(const QString& filePath)
     Q_UNUSED(filePath)
 }
 
+void MobileUIPrivate::emitDeepLinkToQt(const QString& url)
+{
+    Q_UNUSED(url)
+}
+
 float MobileUI::getSmartScaleFactor(float baseWidth, float baseDpi, float baseScale)
 {
     Q_UNUSED(baseWidth);

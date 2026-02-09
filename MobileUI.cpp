@@ -68,6 +68,8 @@ void MobileUI::registerQML()
 
 MobileUI::MobileUI(QObject *parent) : QObject(parent)
 {
+    MobileUI::setInstance(this);
+
 #if defined(Q_OS_ANDROID) || defined(Q_OS_IOS)
     QScreen *screen = qApp->primaryScreen();
     if (screen)

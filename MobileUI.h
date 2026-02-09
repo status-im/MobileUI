@@ -119,6 +119,11 @@ public:
     static int getSafeAreaRight();
     static int getSafeAreaBottom();
 
+    // Deep linking support ////////////////////////////////////////////////////////
+
+    static void setInstance(MobileUI* instance);
+    static void emitDeepLinkToQt(const QString& url);
+
     // Screen helpers //////////////////////////////////////////////////////////
 
     /*!

@@ -334,6 +334,13 @@ void MobileUIPrivate::backToHomeScreen()
 
 /* ************************************************************************** */
 
+void MobileUIPrivate::emitDeepLinkToQt(const QString& url)
+{
+    Q_UNUSED(url)
+}
+
+/* ************************************************************************** */
+
 bool MobileUIPrivate::startAccessingPath(const QString& filePath)
 {
     if (filePath.isEmpty()) {
