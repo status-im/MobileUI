@@ -611,7 +611,6 @@ Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt(JNIEnv* /*env*/, jclass
     if (g_mobileUIInstance) {
         g_mobileUIInstance->emitDeepLinkToQt(deepLink);
     }
-    // MobileUI::emitDeepLinkToQt(deepLink);
 }
 
 /* ************************************************************************** */
