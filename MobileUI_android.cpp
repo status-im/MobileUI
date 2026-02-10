@@ -608,10 +608,10 @@ Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt(JNIEnv* /*env*/, jclass
     const QString deepLink = QJniObject(url).toString();
     if (deepLink.isEmpty()) return;
 
-    // if (g_mobileUIInstance) {
-    //     g_mobileUIInstance->emitDeepLinkToQt(deepLink);
-    // }
-    MobileUI::emitDeepLinkToQt(deepLink);
+    if (g_mobileUIInstance) {
+        g_mobileUIInstance->emitDeepLinkToQt(deepLink);
+    }
+    // MobileUI::emitDeepLinkToQt(deepLink);
 }
 
 /* ************************************************************************** */
