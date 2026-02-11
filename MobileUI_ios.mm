@@ -334,9 +334,22 @@ void MobileUIPrivate::backToHomeScreen()
 
 /* ************************************************************************** */
 
-void MobileUIPrivate::emitDeepLinkToQt(const QString& url)
+// Deep linking support
+
+static MobileUI* g_mobileUIInstance = nullptr;
+
+void MobileUI::setInstance(MobileUI* instance)
 {
-    Q_UNUSED(url)
+    g_mobileUIInstance = instance;
+}
+
+static void MobileUI::emitDeepLinkToQt(const QString& url)
+{
+    if (url.isEmpty()) return;
+
+    if (g_mobileUIInstance) {
+        emit g_mobileUIInstance->deepLinkActivated(url);
+    }
 }
 
 /* ************************************************************************** */

@@ -591,7 +591,7 @@ void MobileUI::setInstance(MobileUI* instance)
     g_mobileUIInstance = instance;
 }
 
-void MobileUI::emitDeepLinkToQt(const QString& url)
+static void MobileUI::emitDeepLinkToQt(const QString& url)
 {
     if (url.isEmpty()) return;
 
@@ -608,9 +608,7 @@ Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt(JNIEnv* /*env*/, jclass
     const QString deepLink = QJniObject(url).toString();
     if (deepLink.isEmpty()) return;
 
-    if (g_mobileUIInstance) {
-        g_mobileUIInstance->emitDeepLinkToQt(deepLink);
-    }
+    MobileUI::emitDeepLinkToQt(deepLink);
 }
 
 /* ************************************************************************** */

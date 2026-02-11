@@ -121,7 +121,16 @@ void MobileUIPrivate::stopAccessingPath(const QString& filePath)
     Q_UNUSED(filePath)
 }
 
-void MobileUIPrivate::emitDeepLinkToQt(const QString& url)
+// Deep linking support
+
+static MobileUI* g_mobileUIInstance = nullptr;
+
+void MobileUI::setInstance(MobileUI* instance)
+{
+    Q_UNUSED(instance)
+}
+
+static void MobileUI::emitDeepLinkToQt(const QString& url)
 {
     Q_UNUSED(url)
 }
