@@ -28,8 +28,6 @@
 #include <QWindow>
 #include <QTimer>
 
-#include <QJniObject>
-
 /* ************************************************************************** */
 
 // WindowManager.LayoutParams
@@ -600,15 +598,5 @@ static void MobileUI::emitDeepLinkToQt(const QString& url)
     }
 }
 
-extern "C" JNIEXPORT void JNICALL
-Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt(JNIEnv* /*env*/, jclass /*clazz*/, jstring url)
-{
-    qDebug() << "Java_app_status_mobile_StatusQtActivity_passDeepLinkToQt called";
-    qDebug() << "url: " << QJniObject(url).toString().toStdString();
-    const QString deepLink = QJniObject(url).toString();
-    if (deepLink.isEmpty()) return;
-
-    MobileUI::emitDeepLinkToQt(deepLink);
-}
 
 /* ************************************************************************** */
