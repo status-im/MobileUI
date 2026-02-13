@@ -56,7 +56,12 @@ void MobileUI::registerQML()
     qRegisterMetaType<MobileUI::Theme>("MobileUI::Theme");
     qRegisterMetaType<MobileUI::ScreenOrientation>("MobileUI::ScreenOrientation");
 
-    qmlRegisterType<MobileUI>("MobileUI", 1, 0, "MobileUI");
+    qmlRegisterSingletonType<MobileUI>("MobileUI", 1, 0, "MobileUI",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject * {
+            Q_UNUSED(engine)
+            Q_UNUSED(scriptEngine)
+            return new MobileUI();
+        });
     qmlRegisterSingletonType<PushNotifications>("MobileUI", 1, 0, "PushNotifications",
         [](QQmlEngine*, QJSEngine*) -> QObject* {
             static PushNotifications* instance = new PushNotifications();
