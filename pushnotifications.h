@@ -29,10 +29,12 @@ public:
                                       const QString& message,
                                       const QString& identifier);
     Q_INVOKABLE void clearNotifications(const QString& identifier);
+    Q_INVOKABLE void finishBackgroundFetch(bool hadNewData);
 
 Q_SIGNALS:
     void statusChanged();
     void tokenChanged();
+    void remoteNotificationReceived();
 
 private:
     void updateStatus(bool forceEmit = false);
