@@ -22,7 +22,7 @@ public:
     void openNotificationSettings();
     void setNotificationPermissionCallback(NotificationPermissionCallback callback);
     void requestAPNSToken();
-    void showNotification(const QString& title, const QString& message, const QString& identifier);
+    void showNotification(const QString& title, const QString& message, const QString& identifier, const QString& threadIdentifier = QString());
     void clearNotifications(const QString& identifier);
     void onAPNSTokenReceived(const QString& token);
     void onRemoteNotificationReceived();              // marshals a queued signal to the main thread

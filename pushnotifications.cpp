@@ -88,16 +88,19 @@ void PushNotifications::openSettings()
 
 void PushNotifications::showNotification(const QString& title,
                                          const QString& message,
-                                         const QString& identifier)
+                                         const QString& identifier,
+                                         const QString& threadIdentifier)
 {
 #if defined(Q_OS_ANDROID)
+    Q_UNUSED(threadIdentifier);
     PushNotificationAndroid::instance()->showNotification(title, message, identifier);
 #elif defined(Q_OS_IOS)
-    PushNotificationIOS::instance()->showNotification(title, message, identifier);
+    PushNotificationIOS::instance()->showNotification(title, message, identifier, threadIdentifier);
 #else
     Q_UNUSED(title);
     Q_UNUSED(message);
     Q_UNUSED(identifier);
+    Q_UNUSED(threadIdentifier);
 #endif
 }
 

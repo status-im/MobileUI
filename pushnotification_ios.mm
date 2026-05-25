@@ -221,11 +221,13 @@ void PushNotificationIOS::requestAPNSToken()
 
 void PushNotificationIOS::showNotification(const QString& title,
                                           const QString& message,
-                                          const QString& identifier)
+                                          const QString& identifier,
+                                          const QString& threadIdentifier)
 {
     const QString titleCopy = title;
     const QString messageCopy = message;
     const QString identifierCopy = identifier;
+    const QString threadIdentifierCopy = threadIdentifier;
 
     auto showBlock = ^{
         UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
@@ -235,6 +237,9 @@ void PushNotificationIOS::showNotification(const QString& title,
         content.badge = @([[UIApplication sharedApplication] applicationIconBadgeNumber] + 1);
 
         content.userInfo = @{@"identifier": identifierCopy.toNSString()};
+
+        if (!threadIdentifierCopy.isEmpty())
+            content.threadIdentifier = threadIdentifierCopy.toNSString();
 
         UNTimeIntervalNotificationTrigger* trigger = [UNTimeIntervalNotificationTrigger
             triggerWithTimeInterval:0.1 repeats:NO];
@@ -337,6 +342,7 @@ void PushNotificationIOS::finishBackgroundFetch(bool hadNewData)
 {
     // Drain on the main queue so the array/timer are only ever touched from one thread.
     dispatch_async(dispatch_get_main_queue(), ^{
+        NSLog(@"[StatusPNDiag] finishBackgroundFetch: DRAIN-ENTER (hadNewData=%d)", hadNewData); // PNDBG
         if (s_backgroundFetchSafetyTimer != nil) {
             [s_backgroundFetchSafetyTimer invalidate];
             s_backgroundFetchSafetyTimer = nil;
@@ -356,10 +362,15 @@ void PushNotificationIOS::finishBackgroundFetch(bool hadNewData)
         NSLog(@"[StatusPNDiag] finishBackgroundFetch(hadNewData=%d): invoking %lu completion(s) with result=%ld",
               hadNewData, (unsigned long)completions.count, (long)result);
 
+        int pndbgIdx = 0;
         for (id obj in completions) {
+            NSLog(@"[StatusPNDiag] finishBackgroundFetch: PRE-invoke completion #%d", pndbgIdx);  // PNDBG
             void (^completion)(UIBackgroundFetchResult) = (void (^)(UIBackgroundFetchResult))obj;
             completion(result);
+            NSLog(@"[StatusPNDiag] finishBackgroundFetch: POST-invoke completion #%d", pndbgIdx); // PNDBG
+            pndbgIdx++;
         }
+        NSLog(@"[StatusPNDiag] finishBackgroundFetch: DRAIN-DONE"); // PNDBG
     });
 }
 

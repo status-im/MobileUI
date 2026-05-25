@@ -27,7 +27,8 @@ public:
     Q_INVOKABLE void openSettings();
     Q_INVOKABLE void showNotification(const QString& title,
                                       const QString& message,
-                                      const QString& identifier);
+                                      const QString& identifier,
+                                      const QString& threadIdentifier = QString());
     Q_INVOKABLE void clearNotifications(const QString& identifier);
     Q_INVOKABLE void finishBackgroundFetch(bool hadNewData);
 
