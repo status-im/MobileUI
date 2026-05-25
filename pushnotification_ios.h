@@ -25,10 +25,14 @@ public:
     void showNotification(const QString& title, const QString& message, const QString& identifier);
     void clearNotifications(const QString& identifier);
     void onAPNSTokenReceived(const QString& token);
+    void onRemoteNotificationReceived();              // marshals a queued signal to the main thread
+    void enqueueBackgroundCompletion(void* handler);  // stores a copied UIBackgroundFetchResult completion block (void* keeps header ObjC-free)
+    void finishBackgroundFetch(bool hadNewData);      // drains all pending completion blocks
 signals:
     void tokenReceived(const QString& token);
     void notificationPermissionChanged(bool granted);
     void notificationTapped(const QString& identifier);
+    void remoteNotificationReceived();
 
 private:
     explicit PushNotificationIOS(QObject* parent = nullptr);

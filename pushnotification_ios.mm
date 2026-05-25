@@ -13,6 +13,14 @@
 PushNotificationIOS* PushNotificationIOS::s_instance = nullptr;
 static NotificationPermissionCallback s_permissionCallback = nullptr;
 
+// Pending iOS UIBackgroundFetchResult completion blocks awaiting status-desktop's
+// finishBackgroundFetch() (or the safety timer). Touched only on the main queue.
+static NSMutableArray* s_pendingCompletions = nil;
+// Safety timer that fires finishBackgroundFetch(true) if status-desktop never reports
+// back within iOS's ~30s background budget. Touched only on the main queue.
+static NSTimer* s_backgroundFetchSafetyTimer = nil;
+static const NSTimeInterval kBackgroundFetchSafetyInterval = 25.0;
+
 static void emitPermissionChanged(bool granted)
 {
     if (auto* inst = PushNotificationIOS::instance()) {
@@ -98,6 +106,8 @@ void PushNotificationIOS::updatePermissionCacheWithStatus(int status, bool force
     const int newValue = granted ? 1 : 0;
     const int previous = m_permissionState.exchange(newValue);
     m_permissionStatus.store(status);
+    NSLog(@"[StatusPNDiag] updatePermissionCacheWithStatus: UN status=%d granted=%d previous=%d forceEmit=%d",
+          status, granted, previous, forceEmit);
     if (forceEmit || previous != newValue) {
         emitPermissionChanged(granted);
     }
@@ -196,10 +206,14 @@ void PushNotificationIOS::openNotificationSettings()
 
 void PushNotificationIOS::requestAPNSToken()
 {
+    NSLog(@"[StatusPNDiag] requestAPNSToken called; cached permissionState=%d permissionStatus=%d",
+          m_permissionState.load(), m_permissionStatus.load());
     if (!hasNotificationPermission()) {
+        NSLog(@"[StatusPNDiag] requestAPNSToken EARLY RETURN — hasNotificationPermission()==false");
         return;
     }
 
+    NSLog(@"[StatusPNDiag] requestAPNSToken: calling [UIApplication registerForRemoteNotifications]");
     dispatch_async(dispatch_get_main_queue(), ^{
         [[UIApplication sharedApplication] registerForRemoteNotifications];
     });
@@ -254,11 +268,99 @@ void PushNotificationIOS::clearNotifications(const QString& identifier)
 
 void PushNotificationIOS::onAPNSTokenReceived(const QString& token)
 {
+    NSLog(@"[StatusPNDiag] onAPNSTokenReceived: token length=%lu first16=%@",
+          (unsigned long)token.length(),
+          token.length() >= 16 ? token.left(16).toNSString() : token.toNSString());
+
     if (m_tokenCallback != nullptr) {
         m_tokenCallback(token.toUtf8().constData());
     }
 
     emit tokenReceived(token);
+    NSLog(@"[StatusPNDiag] onAPNSTokenReceived: emitted tokenReceived signal");
+}
+
+void PushNotificationIOS::onRemoteNotificationReceived()
+{
+    NSLog(@"[StatusPNDiag] onRemoteNotificationReceived: marshaling remoteNotificationReceived to main thread");
+
+    QMetaObject::invokeMethod(this, [this]() {
+        emit remoteNotificationReceived();
+    }, Qt::QueuedConnection);
+
+    // (Re)arm the safety timer so iOS's background budget is honored even if
+    // status-desktop never calls finishBackgroundFetch(). Timer lives on the main queue.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_backgroundFetchSafetyTimer != nil) {
+            [s_backgroundFetchSafetyTimer invalidate];
+            s_backgroundFetchSafetyTimer = nil;
+        }
+        s_backgroundFetchSafetyTimer = [NSTimer
+            scheduledTimerWithTimeInterval:kBackgroundFetchSafetyInterval
+                                   repeats:NO
+                                     block:^(NSTimer* timer) {
+                (void)timer;
+                if (s_pendingCompletions != nil && s_pendingCompletions.count > 0) {
+                    NSLog(@"[StatusPNDiag] background fetch safety timer fired with %lu pending completion(s); finishing best-effort (NewData)",
+                          (unsigned long)s_pendingCompletions.count);
+                    if (auto* inst = PushNotificationIOS::instance()) {
+                        inst->finishBackgroundFetch(true);
+                    }
+                }
+            }];
+        NSLog(@"[StatusPNDiag] onRemoteNotificationReceived: armed %.0fs safety timer", kBackgroundFetchSafetyInterval);
+    });
+}
+
+void PushNotificationIOS::enqueueBackgroundCompletion(void* handler)
+{
+    if (handler == nullptr) {
+        NSLog(@"[StatusPNDiag] enqueueBackgroundCompletion: null handler, ignoring");
+        return;
+    }
+
+    // Copy the block now (it is stack-allocated at the call site) and retain it for later.
+    void (^completion)(UIBackgroundFetchResult) = [(__bridge void (^)(UIBackgroundFetchResult))handler copy];
+
+    // Mutate the shared array only on the main queue to avoid races with finishBackgroundFetch.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_pendingCompletions == nil) {
+            s_pendingCompletions = [[NSMutableArray alloc] init];
+        }
+        [s_pendingCompletions addObject:completion];
+        NSLog(@"[StatusPNDiag] enqueueBackgroundCompletion: now %lu pending completion(s)",
+              (unsigned long)s_pendingCompletions.count);
+    });
+}
+
+void PushNotificationIOS::finishBackgroundFetch(bool hadNewData)
+{
+    // Drain on the main queue so the array/timer are only ever touched from one thread.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_backgroundFetchSafetyTimer != nil) {
+            [s_backgroundFetchSafetyTimer invalidate];
+            s_backgroundFetchSafetyTimer = nil;
+        }
+
+        if (s_pendingCompletions == nil || s_pendingCompletions.count == 0) {
+            NSLog(@"[StatusPNDiag] finishBackgroundFetch(hadNewData=%d): no pending completions, no-op", hadNewData);
+            return;
+        }
+
+        // Snapshot then clear first, so re-entrant calls (or a late timer) see an empty queue.
+        NSArray* completions = [s_pendingCompletions copy];
+        [s_pendingCompletions removeAllObjects];
+
+        const UIBackgroundFetchResult result =
+            hadNewData ? UIBackgroundFetchResultNewData : UIBackgroundFetchResultNoData;
+        NSLog(@"[StatusPNDiag] finishBackgroundFetch(hadNewData=%d): invoking %lu completion(s) with result=%ld",
+              hadNewData, (unsigned long)completions.count, (long)result);
+
+        for (id obj in completions) {
+            void (^completion)(UIBackgroundFetchResult) = (void (^)(UIBackgroundFetchResult))obj;
+            completion(result);
+        }
+    });
 }
 
 #endif // Q_OS_IOS
