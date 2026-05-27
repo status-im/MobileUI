@@ -22,8 +22,18 @@ public:
     void openNotificationSettings();
     void setNotificationPermissionCallback(NotificationPermissionCallback callback);
     void requestAPNSToken();
-    void showNotification(const QString& title, const QString& message, const QString& identifier, const QString& threadIdentifier = QString());
+    void showNotification(const QString& title,
+                          const QString& body,
+                          const QString& identifier,
+                          const QString& threadIdentifier = QString(),
+                          const QString& senderName = QString(),
+                          const QString& senderId = QString(),
+                          const QString& avatarBase64 = QString(),
+                          const QString& conversationName = QString(),
+                          const QString& conversationImageBase64 = QString(),
+                          const QString& deepLink = QString());
     void clearNotifications(const QString& identifier);
+    void clearAllNotifications();
     void onAPNSTokenReceived(const QString& token);
     void onRemoteNotificationReceived();              // marshals a queued signal to the main thread
     void enqueueBackgroundCompletion(void* handler);  // stores a copied UIBackgroundFetchResult completion block (void* keeps header ObjC-free)

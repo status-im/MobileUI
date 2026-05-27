@@ -31,7 +31,7 @@ elseif(IOS)
         pushnotification_ios.mm
         mobileuiappdelegate_ios.h
         mobileuiappdelegate_ios.mm)
-    set(PLATFORM_LIBRARIES "-framework UIKit -framework UserNotifications")
+    set(PLATFORM_LIBRARIES "-framework UIKit -framework UserNotifications -framework Intents")
 else()
     set(PLATFORM_SOURCES MobileUI_dummy.cpp)
 endif()

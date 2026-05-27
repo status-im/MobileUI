@@ -87,20 +87,28 @@ void PushNotifications::openSettings()
 }
 
 void PushNotifications::showNotification(const QString& title,
-                                         const QString& message,
+                                         const QString& body,
                                          const QString& identifier,
-                                         const QString& threadIdentifier)
+                                         const QString& threadIdentifier,
+                                         const QString& senderName,
+                                         const QString& senderId,
+                                         const QString& avatarBase64,
+                                         const QString& conversationName,
+                                         const QString& conversationImageBase64,
+                                         const QString& deepLink)
 {
 #if defined(Q_OS_ANDROID)
-    Q_UNUSED(threadIdentifier);
-    PushNotificationAndroid::instance()->showNotification(title, message, identifier);
+    Q_UNUSED(threadIdentifier); Q_UNUSED(senderName); Q_UNUSED(senderId);
+    Q_UNUSED(avatarBase64); Q_UNUSED(conversationName); Q_UNUSED(conversationImageBase64); Q_UNUSED(deepLink);
+    PushNotificationAndroid::instance()->showNotification(title, body, identifier);
 #elif defined(Q_OS_IOS)
-    PushNotificationIOS::instance()->showNotification(title, message, identifier, threadIdentifier);
+    PushNotificationIOS::instance()->showNotification(title, body, identifier, threadIdentifier,
+                                                      senderName, senderId, avatarBase64,
+                                                      conversationName, conversationImageBase64, deepLink);
 #else
-    Q_UNUSED(title);
-    Q_UNUSED(message);
-    Q_UNUSED(identifier);
-    Q_UNUSED(threadIdentifier);
+    Q_UNUSED(title); Q_UNUSED(body); Q_UNUSED(identifier); Q_UNUSED(threadIdentifier);
+    Q_UNUSED(senderName); Q_UNUSED(senderId); Q_UNUSED(avatarBase64);
+    Q_UNUSED(conversationName); Q_UNUSED(conversationImageBase64); Q_UNUSED(deepLink);
 #endif
 }
 
@@ -112,6 +120,15 @@ void PushNotifications::clearNotifications(const QString& identifier)
     PushNotificationIOS::instance()->clearNotifications(identifier);
 #else
     Q_UNUSED(identifier);
+#endif
+}
+
+void PushNotifications::clearAllNotifications()
+{
+#if defined(Q_OS_ANDROID)
+    PushNotificationAndroid::instance()->clearNotifications(QString());   // empty id -> cancelAll
+#elif defined(Q_OS_IOS)
+    PushNotificationIOS::instance()->clearAllNotifications();
 #endif
 }
 

@@ -26,10 +26,17 @@ public:
     Q_INVOKABLE void requestToken();
     Q_INVOKABLE void openSettings();
     Q_INVOKABLE void showNotification(const QString& title,
-                                      const QString& message,
+                                      const QString& body,
                                       const QString& identifier,
-                                      const QString& threadIdentifier = QString());
+                                      const QString& threadIdentifier = QString(),
+                                      const QString& senderName = QString(),
+                                      const QString& senderId = QString(),
+                                      const QString& avatarBase64 = QString(),
+                                      const QString& conversationName = QString(),
+                                      const QString& conversationImageBase64 = QString(),
+                                      const QString& deepLink = QString());
     Q_INVOKABLE void clearNotifications(const QString& identifier);
+    Q_INVOKABLE void clearAllNotifications();
     Q_INVOKABLE void finishBackgroundFetch(bool hadNewData);
 
 Q_SIGNALS:

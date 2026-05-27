@@ -7,8 +7,21 @@
 #import <UserNotifications/UserNotifications.h>
 #import <UIKit/UIKit.h>
 
+// Apple's Intents headers (e.g. INActivateCarSignalIntent.h) declare a property named
+// `signals`, which collides with Qt's `signals` macro (expands to `public`). Suspend Qt's
+// moc keyword macros just for this import, then restore them.
+#pragma push_macro("signals")
+#pragma push_macro("slots")
+#undef signals
+#undef slots
+#import <Intents/Intents.h>
+#pragma pop_macro("slots")
+#pragma pop_macro("signals")
+
 #include <QCoreApplication>
 #include <QMetaObject>
+#include <QDesktopServices>
+#include <QUrl>
 
 PushNotificationIOS* PushNotificationIOS::s_instance = nullptr;
 static NotificationPermissionCallback s_permissionCallback = nullptr;
@@ -29,6 +42,49 @@ static void emitPermissionChanged(bool granted)
         }, Qt::QueuedConnection);
     }
 }
+
+// Routes a tapped notification's deep link into the app's existing in-app status-app://
+// URL handler (registered at startup via QDesktopServices::setUrlHandler in DOtherSide's
+// UrlSchemeEvent). This mirrors Android's PendingIntent(ACTION_VIEW, deepLink): both feed
+// the same UrlsManager -> activateStatusDeepLink path that opens the conversation.
+@interface StatusUNDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+
+@implementation StatusUNDelegate
+- (void)userNotificationCenter:(UNUserNotificationCenter*)center
+    didReceiveNotificationResponse:(UNNotificationResponse*)response
+             withCompletionHandler:(void (^)(void))completionHandler
+{
+    (void)center;
+    NSString* deepLink = response.notification.request.content.userInfo[@"deepLink"];
+    if (deepLink.length > 0) {
+        const QString url = QString::fromNSString(deepLink);
+        // Hop onto the Qt/GUI thread: openUrl() synchronously invokes the registered
+        // status-app handler, which must run where the QML engine lives.
+        QMetaObject::invokeMethod(qApp, [url]() {
+            QDesktopServices::openUrl(QUrl(url));
+        }, Qt::QueuedConnection);
+    }
+    completionHandler();
+}
+
+- (void)userNotificationCenter:(UNUserNotificationCenter*)center
+       willPresentNotification:(UNNotification*)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler
+{
+    (void)center;
+    // Real message notifications are meant for the background, so we suppress them while
+    // the app is in the foreground (the default). The in-app TEST notification is the one
+    // exception — surface it so the settings "send test notification" button is verifiable.
+    if ([notification.request.identifier isEqualToString:@"status-test-notification"]) {
+        completionHandler(UNNotificationPresentationOptionBanner
+                          | UNNotificationPresentationOptionList
+                          | UNNotificationPresentationOptionSound);
+    } else {
+        completionHandler(UNNotificationPresentationOptionNone);
+    }
+}
+@end
 
 PushNotificationIOS::PushNotificationIOS(QObject* parent)
     : QObject(parent)
@@ -72,6 +128,15 @@ void PushNotificationIOS::initialize(PushNotificationTokenCallback tokenCallback
                     }];
     }
 
+    // Set the notification-center delegate so taps route their deep link into the app.
+    // The center keeps only a WEAK reference to its delegate, so keep ours alive in a
+    // static (MRC: intentionally retained for the process lifetime).
+    static StatusUNDelegate* s_unDelegate = nil;
+    if (!s_unDelegate) {
+        s_unDelegate = [[StatusUNDelegate alloc] init];
+        [UNUserNotificationCenter currentNotificationCenter].delegate = s_unDelegate;
+    }
+
     m_initialized = true;
 }
 
@@ -106,8 +171,6 @@ void PushNotificationIOS::updatePermissionCacheWithStatus(int status, bool force
     const int newValue = granted ? 1 : 0;
     const int previous = m_permissionState.exchange(newValue);
     m_permissionStatus.store(status);
-    NSLog(@"[StatusPNDiag] updatePermissionCacheWithStatus: UN status=%d granted=%d previous=%d forceEmit=%d",
-          status, granted, previous, forceEmit);
     if (forceEmit || previous != newValue) {
         emitPermissionChanged(granted);
     }
@@ -206,60 +269,220 @@ void PushNotificationIOS::openNotificationSettings()
 
 void PushNotificationIOS::requestAPNSToken()
 {
-    NSLog(@"[StatusPNDiag] requestAPNSToken called; cached permissionState=%d permissionStatus=%d",
-          m_permissionState.load(), m_permissionStatus.load());
     if (!hasNotificationPermission()) {
-        NSLog(@"[StatusPNDiag] requestAPNSToken EARLY RETURN — hasNotificationPermission()==false");
         return;
     }
 
-    NSLog(@"[StatusPNDiag] requestAPNSToken: calling [UIApplication registerForRemoteNotifications]");
     dispatch_async(dispatch_get_main_queue(), ^{
         [[UIApplication sharedApplication] registerForRemoteNotifications];
     });
 }
 
-void PushNotificationIOS::showNotification(const QString& title,
-                                          const QString& message,
-                                          const QString& identifier,
-                                          const QString& threadIdentifier)
+// Decodes a base64 image (optionally prefixed with a "data:...;base64," URI) into a UIImage.
+// We deliberately rely on base64 ONLY: the media server backing http(s) avatar URLs is
+// unreachable while the app is backgrounded (observed "Connection refused"), so a URL fetch
+// here would just fail. Returns nil when the string is empty, a URL, or not decodable.
+static UIImage* pn_imageFromBase64(NSString* s)
 {
-    const QString titleCopy = title;
-    const QString messageCopy = message;
-    const QString identifierCopy = identifier;
-    const QString threadIdentifierCopy = threadIdentifier;
+    if (s.length == 0)
+        return nil;
+    NSString* b64 = s;
+    const NSRange marker = [s rangeOfString:@";base64,"];
+    if (marker.location != NSNotFound)
+        b64 = [s substringFromIndex:NSMaxRange(marker)];
+    else if ([s hasPrefix:@"data:"] || [s hasPrefix:@"http"])
+        return nil; // a URL or non-base64 data URI — nothing we can render offline
+    NSData* data = [[[NSData alloc] initWithBase64EncodedString:b64
+        options:NSDataBase64DecodingIgnoreUnknownCharacters] autorelease];
+    if (data.length == 0)
+        return nil;
+    return [UIImage imageWithData:data];
+}
+
+// Colored-initials avatar, mirroring Android's createInitialsAvatar fallback for senders
+// without a picture. The hue is derived from the name so a contact keeps a stable color.
+static UIImage* pn_initialsAvatar(NSString* name, CGFloat size)
+{
+    NSString* trimmed = [name stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    NSString* initial = trimmed.length > 0 ? [[trimmed substringToIndex:1] uppercaseString] : @"?";
+
+    NSUInteger hash = 5381;
+    for (NSUInteger i = 0; i < name.length; ++i)
+        hash = ((hash << 5) + hash) + [name characterAtIndex:i];
+    CGFloat hue = (hash % 360) / 360.0;
+    UIColor* bg = [UIColor colorWithHue:hue saturation:0.55 brightness:0.75 alpha:1.0];
+
+    UIGraphicsImageRenderer* renderer = [[[UIGraphicsImageRenderer alloc]
+        initWithSize:CGSizeMake(size, size)] autorelease];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext* ctx) {
+        CGRect rect = CGRectMake(0, 0, size, size);
+        [bg setFill];
+        CGContextFillEllipseInRect(ctx.CGContext, rect);
+        UIFont* font = [UIFont systemFontOfSize:size * 0.42 weight:UIFontWeightSemibold];
+        NSDictionary* attrs = @{ NSFontAttributeName: font,
+                                 NSForegroundColorAttributeName: [UIColor whiteColor] };
+        CGSize textSize = [initial sizeWithAttributes:attrs];
+        CGPoint origin = CGPointMake((size - textSize.width) / 2.0,
+                                     (size - textSize.height) / 2.0);
+        [initial drawAtPoint:origin withAttributes:attrs];
+    }];
+}
+
+void PushNotificationIOS::showNotification(const QString& title,
+                                           const QString& body,
+                                           const QString& identifier,
+                                           const QString& threadIdentifier,
+                                           const QString& senderName,
+                                           const QString& senderId,
+                                           const QString& avatarBase64,
+                                           const QString& conversationName,
+                                           const QString& conversationImageBase64,
+                                           const QString& deepLink)
+{
+    // Snapshot every field by value; the block below runs on the main queue.
+    const QString idCopy           = identifier;
+    const QString titleCopy        = title;
+    const QString bodyCopy         = body;
+    const QString threadCopy       = threadIdentifier;
+    const QString senderNameCopy   = senderName;
+    const QString senderIdCopy     = senderId;
+    const QString convNameCopy     = conversationName;
+    const QString avatarB64Copy    = avatarBase64;
+    const QString convImageB64Copy = conversationImageBase64;
+    const QString deepLinkCopy     = deepLink;
 
     auto showBlock = ^{
-        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
-        content.title = titleCopy.toNSString();
-        content.body = messageCopy.toNSString();
-        content.sound = [UNNotificationSound defaultSound];
+        NSString* identifier = idCopy.toNSString();
+        NSString* title      = titleCopy.toNSString();
+        NSString* body       = bodyCopy.toNSString();
+        NSString* threadId   = threadCopy.toNSString();
+        NSString* senderName = senderNameCopy.toNSString();
+        NSString* senderId   = senderIdCopy.toNSString();
+        NSString* convName     = convNameCopy.toNSString();
+        NSString* convImageB64 = convImageB64Copy.toNSString();
+        NSString* deepLink     = deepLinkCopy.toNSString();
+
+        // We show only the sender's avatar (base64, with an Android-style initials
+        // fallback). The conversation context goes in the subtitle text below, not as a
+        // composited badge — iOS already stamps its own non-removable app-icon overlay.
+        UIImage* personImage = pn_imageFromBase64(avatarB64Copy.toNSString());
+        if (!personImage)
+            personImage = pn_initialsAvatar(senderName.length > 0 ? senderName : convName, 256.0);
+
+        // Base text content — used as-is if the communication-notification path fails.
+        UNMutableNotificationContent* content = [[[UNMutableNotificationContent alloc] init] autorelease];
+        // The title is the conversation, so the user can tell a message's origin apart:
+        // the sender's name for 1:1, or the group / "community · channel" name otherwise.
+        // speakableGroupName (below) drives the same distinction in the communication-
+        // notification layout (where the subtitle is not reliably shown).
+        content.title = convName.length > 0 ? convName : title;
+        content.body = body;
+        content.sound = nil; // silent: replaces the already-delivered generic remote push
         content.badge = @([[UIApplication sharedApplication] applicationIconBadgeNumber] + 1);
+        // Carry the deep link so a tap can route into the conversation (see the
+        // UNUserNotificationCenterDelegate below).
+        NSMutableDictionary* userInfo =
+            [NSMutableDictionary dictionaryWithObject:identifier forKey:@"identifier"];
+        if (deepLink.length > 0)
+            userInfo[@"deepLink"] = deepLink;
+        content.userInfo = userInfo;
+        if (threadId.length > 0)
+            content.threadIdentifier = threadId;
 
-        content.userInfo = @{@"identifier": identifierCopy.toNSString()};
+        UNNotificationContent* finalContent = content;
 
-        if (!threadIdentifierCopy.isEmpty())
-            content.threadIdentifier = threadIdentifierCopy.toNSString();
+        // iOS 15+ Communication Notification: donate an INSendMessageIntent so the system
+        // renders the sender avatar (plus its automatic app-icon overlay).
+        if (@available(iOS 15.0, *)) {
+            @try {
+                INImage* inImage = personImage ? [INImage imageWithUIImage:personImage] : nil;
+                INPersonHandle* handle = [[[INPersonHandle alloc]
+                    initWithValue:senderId type:INPersonHandleTypeUnknown] autorelease];
+                INPerson* sender = [[[INPerson alloc]
+                    initWithPersonHandle:handle
+                          nameComponents:nil
+                             displayName:senderName
+                                   image:inImage
+                       contactIdentifier:nil
+                        customIdentifier:senderId] autorelease];
+
+                // A communication notification needs a recipient list, and iOS only honors
+                // speakableGroupName when the message looks like a GROUP — i.e. has more
+                // than one recipient. So we add the local user ("me") plus the sender for
+                // group/community, and just "me" for 1:1. With recipients:nil every type
+                // fell back to the sender, which is why they all looked identical.
+                INPersonHandle* meHandle = [[[INPersonHandle alloc]
+                    initWithValue:@"me" type:INPersonHandleTypeUnknown] autorelease];
+                INPerson* mePerson = [[[INPerson alloc]
+                    initWithPersonHandle:meHandle nameComponents:nil displayName:nil image:nil
+                    contactIdentifier:nil customIdentifier:nil isMe:YES
+                    suggestionType:INPersonSuggestionTypeNone] autorelease];
+                NSArray<INPerson*>* recipients = convName.length > 0
+                    ? @[mePerson, sender]   // >1 recipient -> GROUP -> speakableGroupName shows
+                    : @[mePerson];          // 1:1
+                INSpeakableString* groupName = convName.length > 0
+                    ? [[[INSpeakableString alloc] initWithSpokenPhrase:convName] autorelease]
+                    : nil;
+                INSendMessageIntent* intent = [[[INSendMessageIntent alloc]
+                    initWithRecipients:recipients
+                    outgoingMessageType:INOutgoingMessageTypeOutgoingMessageText
+                    content:nil
+                    speakableGroupName:groupName
+                    conversationIdentifier:(threadId.length > 0 ? threadId : identifier)
+                    serviceName:nil
+                    sender:sender
+                    attachments:nil] autorelease];
+                if (inImage)
+                    [intent setImage:inImage forParameterNamed:@"sender"];
+                // Group/community: feed the conversation (group/community) icon to the
+                // group image slot. Now that recipients mark this as a group, iOS should
+                // render speakableGroupName's image as the conversation icon.
+                if (convName.length > 0) {
+                    UIImage* convImg = pn_imageFromBase64(convImageB64);
+                    if (convImg)
+                        [intent setImage:[INImage imageWithUIImage:convImg]
+                            forParameterNamed:@"speakableGroupName"];
+                }
+
+                INInteraction* interaction = [[[INInteraction alloc] initWithIntent:intent response:nil] autorelease];
+                interaction.direction = INInteractionDirectionIncoming;
+                [interaction donateInteractionWithCompletion:nil];
+
+                NSError* updErr = nil;
+                UNNotificationContent* updated =
+                    [content contentByUpdatingWithProvider:intent error:&updErr];
+                if (updated && !updErr) {
+                    finalContent = updated;
+                    qDebug("Status push: enriched notification posted");
+                } else {
+                    qWarning("Status push: failed to enrich notification: %s",
+                             updErr ? updErr.localizedDescription.UTF8String : "unknown");
+                }
+            } @catch (NSException* ex) {
+                qWarning("Status push: enrich exception: %s", ex.reason.UTF8String);
+            }
+        }
 
         UNTimeIntervalNotificationTrigger* trigger = [UNTimeIntervalNotificationTrigger
             triggerWithTimeInterval:0.1 repeats:NO];
-
         UNNotificationRequest* request = [UNNotificationRequest
-            requestWithIdentifier:identifierCopy.toNSString()
-            content:content
-            trigger:trigger];
+            requestWithIdentifier:identifier content:finalContent trigger:trigger];
 
         UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];
+        // Remove the already-delivered generic remote push for this message before posting
+        // the enriched one (see showNotification for the full rationale).
+        [center removeDeliveredNotificationsWithIdentifiers:@[identifier]];
         [center addNotificationRequest:request withCompletionHandler:^(NSError* error) {
-            Q_UNUSED(error);
+            if (error)
+                qWarning("Status push: failed to post notification: %s", error.localizedDescription.UTF8String);
         }];
     };
 
-    if ([NSThread isMainThread]) {
+    if ([NSThread isMainThread])
         showBlock();
-    } else {
+    else
         dispatch_async(dispatch_get_main_queue(), showBlock);
-    }
 }
 
 void PushNotificationIOS::clearNotifications(const QString& identifier)
@@ -271,24 +494,25 @@ void PushNotificationIOS::clearNotifications(const QString& identifier)
     [center removePendingNotificationRequestsWithIdentifiers:@[identifier.toNSString()]];
 }
 
+void PushNotificationIOS::clearAllNotifications()
+{
+    UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];
+    [center removeAllDeliveredNotifications];
+    [center removeAllPendingNotificationRequests];
+    [center setBadgeCount:0 withCompletionHandler:nil];   // iOS 16+; deployment target is 26
+}
+
 void PushNotificationIOS::onAPNSTokenReceived(const QString& token)
 {
-    NSLog(@"[StatusPNDiag] onAPNSTokenReceived: token length=%lu first16=%@",
-          (unsigned long)token.length(),
-          token.length() >= 16 ? token.left(16).toNSString() : token.toNSString());
-
     if (m_tokenCallback != nullptr) {
         m_tokenCallback(token.toUtf8().constData());
     }
 
     emit tokenReceived(token);
-    NSLog(@"[StatusPNDiag] onAPNSTokenReceived: emitted tokenReceived signal");
 }
 
 void PushNotificationIOS::onRemoteNotificationReceived()
 {
-    NSLog(@"[StatusPNDiag] onRemoteNotificationReceived: marshaling remoteNotificationReceived to main thread");
-
     QMetaObject::invokeMethod(this, [this]() {
         emit remoteNotificationReceived();
     }, Qt::QueuedConnection);
@@ -305,22 +529,23 @@ void PushNotificationIOS::onRemoteNotificationReceived()
                                    repeats:NO
                                      block:^(NSTimer* timer) {
                 (void)timer;
+                // This non-repeating timer has fired; the run loop is about to
+                // release it. This file is built WITHOUT ARC, so the static does
+                // not retain the timer — clear it NOW so neither finishBackgroundFetch
+                // nor the re-arm path messages the soon-to-be-freed timer (EXC_BAD_ACCESS).
+                s_backgroundFetchSafetyTimer = nil;
                 if (s_pendingCompletions != nil && s_pendingCompletions.count > 0) {
-                    NSLog(@"[StatusPNDiag] background fetch safety timer fired with %lu pending completion(s); finishing best-effort (NewData)",
-                          (unsigned long)s_pendingCompletions.count);
                     if (auto* inst = PushNotificationIOS::instance()) {
                         inst->finishBackgroundFetch(true);
                     }
                 }
             }];
-        NSLog(@"[StatusPNDiag] onRemoteNotificationReceived: armed %.0fs safety timer", kBackgroundFetchSafetyInterval);
     });
 }
 
 void PushNotificationIOS::enqueueBackgroundCompletion(void* handler)
 {
     if (handler == nullptr) {
-        NSLog(@"[StatusPNDiag] enqueueBackgroundCompletion: null handler, ignoring");
         return;
     }
 
@@ -333,8 +558,6 @@ void PushNotificationIOS::enqueueBackgroundCompletion(void* handler)
             s_pendingCompletions = [[NSMutableArray alloc] init];
         }
         [s_pendingCompletions addObject:completion];
-        NSLog(@"[StatusPNDiag] enqueueBackgroundCompletion: now %lu pending completion(s)",
-              (unsigned long)s_pendingCompletions.count);
     });
 }
 
@@ -342,14 +565,12 @@ void PushNotificationIOS::finishBackgroundFetch(bool hadNewData)
 {
     // Drain on the main queue so the array/timer are only ever touched from one thread.
     dispatch_async(dispatch_get_main_queue(), ^{
-        NSLog(@"[StatusPNDiag] finishBackgroundFetch: DRAIN-ENTER (hadNewData=%d)", hadNewData); // PNDBG
         if (s_backgroundFetchSafetyTimer != nil) {
             [s_backgroundFetchSafetyTimer invalidate];
             s_backgroundFetchSafetyTimer = nil;
         }
 
         if (s_pendingCompletions == nil || s_pendingCompletions.count == 0) {
-            NSLog(@"[StatusPNDiag] finishBackgroundFetch(hadNewData=%d): no pending completions, no-op", hadNewData);
             return;
         }
 
@@ -359,18 +580,11 @@ void PushNotificationIOS::finishBackgroundFetch(bool hadNewData)
 
         const UIBackgroundFetchResult result =
             hadNewData ? UIBackgroundFetchResultNewData : UIBackgroundFetchResultNoData;
-        NSLog(@"[StatusPNDiag] finishBackgroundFetch(hadNewData=%d): invoking %lu completion(s) with result=%ld",
-              hadNewData, (unsigned long)completions.count, (long)result);
 
-        int pndbgIdx = 0;
         for (id obj in completions) {
-            NSLog(@"[StatusPNDiag] finishBackgroundFetch: PRE-invoke completion #%d", pndbgIdx);  // PNDBG
             void (^completion)(UIBackgroundFetchResult) = (void (^)(UIBackgroundFetchResult))obj;
             completion(result);
-            NSLog(@"[StatusPNDiag] finishBackgroundFetch: POST-invoke completion #%d", pndbgIdx); // PNDBG
-            pndbgIdx++;
         }
-        NSLog(@"[StatusPNDiag] finishBackgroundFetch: DRAIN-DONE"); // PNDBG
     });
 }
 

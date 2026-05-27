@@ -63,8 +63,6 @@ void mobileui_initIOSAppDelegateCategory()
 - (void)mobileUISwizzled_application:(UIApplication *)application
     didRegisterForRemoteNotificationsWithDeviceToken:(NSData *)deviceToken
 {
-    NSLog(@"[StatusPNDiag] didRegisterForRemoteNotificationsWithDeviceToken: iOS delivered APNS token (length=%lu bytes)",
-          (unsigned long)deviceToken.length);
     (void)application;
 
     const unsigned char *bytes = (const unsigned char *)[deviceToken bytes];
@@ -87,7 +85,14 @@ void mobileui_initIOSAppDelegateCategory()
       didReceiveRemoteNotification:(NSDictionary *)userInfo
             fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler
 {
-    NSLog(@"[StatusPNDiag] didReceiveRemoteNotification (background wake)");
+    // Foreground: the app already receives messages live and the banner is suppressed
+    // (willPresentNotification). Nothing to enrich, so just complete. (A silent background
+    // wake keeps applicationState == Background, so it falls through to normal processing.)
+    if (application.applicationState == UIApplicationStateActive) {
+        completionHandler(UIBackgroundFetchResultNoData);
+        return;
+    }
+
     PushNotificationIOS::instance()->enqueueBackgroundCompletion((__bridge void*)completionHandler);
     PushNotificationIOS::instance()->onRemoteNotificationReceived();
     // CONTENTLESS: do NOT read userInfo content (payload is only Shake256 hashes + flags)
@@ -100,8 +105,8 @@ void mobileui_initIOSAppDelegateCategory()
     didFailToRegisterForRemoteNotificationsWithError:(NSError *)error
 {
     (void)application;
-    NSLog(@"[StatusPNDiag] didFailToRegisterForRemoteNotificationsWithError: %@",
-          error.localizedDescription ?: @"(nil)");
+    qWarning("Status push: APNS registration failed: %s",
+             (error.localizedDescription ?: @"(nil)").UTF8String);
 }
 
 @end
