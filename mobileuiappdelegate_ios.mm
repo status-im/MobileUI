@@ -1,10 +1,12 @@
 #import "mobileuiappdelegate_ios.h"
 #import <objc/runtime.h>
 
+#include <QDebug>
 #include <QString>
 #include "pushnotification_ios.h"
 
 static bool s_hasOriginalTokenMethod = false;
+static bool s_hasOriginalReceiveMethod = false;
 
 void mobileui_initIOSAppDelegateCategory()
 {
@@ -17,6 +19,8 @@ void mobileui_initIOSAppDelegateCategory()
 {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        mobileui_installPushTapDelegate();
+
         Class originalClass = NSClassFromString(@"QIOSApplicationDelegate");
         Class swizzledClass = [self class];
 
@@ -39,6 +43,24 @@ void mobileui_initIOSAppDelegateCategory()
                 method_exchangeImplementations(tokenMethod, swizzledTokenMethod);
             }
         }
+
+        // Background (silent) wake.
+        SEL receiveSelector = @selector(application:didReceiveRemoteNotification:fetchCompletionHandler:);
+        SEL swizzledReceiveSelector = @selector(mobileUISwizzled_application:didReceiveRemoteNotification:fetchCompletionHandler:);
+
+        Method receiveMethod = class_getInstanceMethod(originalClass, receiveSelector);
+        s_hasOriginalReceiveMethod = (receiveMethod != nullptr);
+        Method swizzledReceiveMethod = class_getInstanceMethod(swizzledClass, swizzledReceiveSelector);
+
+        if (swizzledReceiveMethod) {
+            if (!receiveMethod) {
+                class_addMethod(originalClass, receiveSelector,
+                               method_getImplementation(swizzledReceiveMethod),
+                               method_getTypeEncoding(swizzledReceiveMethod));
+            } else {
+                method_exchangeImplementations(receiveMethod, swizzledReceiveMethod);
+            }
+        }
     });
 }
 
@@ -59,6 +81,31 @@ void mobileui_initIOSAppDelegateCategory()
         [self mobileUISwizzled_application:application
             didRegisterForRemoteNotificationsWithDeviceToken:deviceToken];
     }
+}
+
+- (void)mobileUISwizzled_application:(UIApplication *)application
+      didReceiveRemoteNotification:(NSDictionary *)userInfo
+            fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler
+{
+    // Foreground: complete immediately; no wake plumbing needed.
+    if (application.applicationState == UIApplicationStateActive) {
+        completionHandler(UIBackgroundFetchResultNoData);
+        return;
+    }
+
+    PushNotificationIOS::instance()->enqueueBackgroundCompletion((__bridge void*)completionHandler);
+    PushNotificationIOS::instance()->onRemoteNotificationReceived();
+    if (s_hasOriginalReceiveMethod) {
+        [self mobileUISwizzled_application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:completionHandler];
+    }
+}
+
+- (void)application:(UIApplication *)application
+    didFailToRegisterForRemoteNotificationsWithError:(NSError *)error
+{
+    (void)application;
+    qWarning() << "Push: APNS registration failed:"
+               << QString::fromNSString(error.localizedDescription ?: @"(nil)");
 }
 
 @end

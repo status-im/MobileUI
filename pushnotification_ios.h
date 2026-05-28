@@ -25,10 +25,14 @@ public:
     void showNotification(const QString& title, const QString& message, const QString& identifier);
     void clearNotifications(const QString& identifier);
     void onAPNSTokenReceived(const QString& token);
+    void onRemoteNotificationReceived();
+    void enqueueBackgroundCompletion(void* handler);  // void* keeps the header ObjC-free
+    void finishBackgroundFetch(bool hadNewData);
 signals:
     void tokenReceived(const QString& token);
     void notificationPermissionChanged(bool granted);
     void notificationTapped(const QString& identifier);
+    void remoteNotificationReceived();
 
 private:
     explicit PushNotificationIOS(QObject* parent = nullptr);
@@ -45,5 +49,9 @@ private:
     std::atomic<int> m_permissionStatus;
     bool m_permissionObserverAdded;
 };
+
+// Installs the UNUserNotificationCenterDelegate for tap routing. Idempotent;
+// safe to call before QGuiApplication exists.
+void mobileui_installPushTapDelegate();
 
 #endif // Q_OS_IOS

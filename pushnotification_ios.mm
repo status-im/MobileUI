@@ -8,10 +8,61 @@
 #import <UIKit/UIKit.h>
 
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QMetaObject>
+#include <QString>
+#include <QUrl>
 
 PushNotificationIOS* PushNotificationIOS::s_instance = nullptr;
 static NotificationPermissionCallback s_permissionCallback = nullptr;
+
+// Pending iOS background-fetch completion blocks. Mutated only on the main queue.
+static NSMutableArray* s_pendingCompletions = nil;
+// Safety net to honor iOS's ~30 s background budget if finishBackgroundFetch() is never called.
+static NSTimer* s_backgroundFetchSafetyTimer = nil;
+static const NSTimeInterval kBackgroundFetchSafetyInterval = 25.0;
+
+// Notification-center delegate: forwards userInfo[deepLink] to QDesktopServices::openUrl().
+@interface StatusUNDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+
+@implementation StatusUNDelegate
+
+- (void)userNotificationCenter:(UNUserNotificationCenter*)center
+    didReceiveNotificationResponse:(UNNotificationResponse*)response
+             withCompletionHandler:(void (^)(void))completionHandler
+{
+    (void)center;
+    if ([response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
+        NSDictionary* userInfo = response.notification.request.content.userInfo;
+        id deepLink = userInfo[@"deepLink"];
+        if (![deepLink isKindOfClass:[NSString class]]) {
+            id data = userInfo[@"data"];
+            if ([data isKindOfClass:[NSDictionary class]]) {
+                deepLink = data[@"deepLink"];
+            }
+        }
+        if ([deepLink isKindOfClass:[NSString class]] && [(NSString*)deepLink length] > 0) {
+            const QString link = QString::fromNSString((NSString*)deepLink);
+            QMetaObject::invokeMethod(qApp, [link]() {
+                QDesktopServices::openUrl(QUrl(link));
+            }, Qt::QueuedConnection);
+        }
+    }
+    completionHandler();
+}
+
+@end
+
+void mobileui_installPushTapDelegate()
+{
+    // The center holds its delegate weakly; keep a strong static reference. Idempotent.
+    static StatusUNDelegate* s_unDelegate = nil;
+    if (s_unDelegate == nil) {
+        s_unDelegate = [[StatusUNDelegate alloc] init];
+        [UNUserNotificationCenter currentNotificationCenter].delegate = s_unDelegate;
+    }
+}
 
 static void emitPermissionChanged(bool granted)
 {
@@ -46,6 +97,9 @@ void PushNotificationIOS::initialize(PushNotificationTokenCallback tokenCallback
     }
 
     mobileui_initIOSAppDelegateCategory();
+
+    // Belt-and-suspenders: also installed from +load to catch cold-launch taps.
+    mobileui_installPushTapDelegate();
 
     m_tokenCallback = tokenCallback;
     refreshNotificationPermissionCache();
@@ -259,6 +313,80 @@ void PushNotificationIOS::onAPNSTokenReceived(const QString& token)
     }
 
     emit tokenReceived(token);
+}
+
+void PushNotificationIOS::onRemoteNotificationReceived()
+{
+    QMetaObject::invokeMethod(this, [this]() {
+        emit remoteNotificationReceived();
+    }, Qt::QueuedConnection);
+
+    // (Re)arm the safety timer so iOS's background budget is honored even without a
+    // finishBackgroundFetch() call. Timer lives on the main queue.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_backgroundFetchSafetyTimer != nil) {
+            [s_backgroundFetchSafetyTimer invalidate];
+            s_backgroundFetchSafetyTimer = nil;
+        }
+        s_backgroundFetchSafetyTimer = [NSTimer
+            scheduledTimerWithTimeInterval:kBackgroundFetchSafetyInterval
+                                   repeats:NO
+                                     block:^(NSTimer* timer) {
+                (void)timer;
+                // No ARC: the static doesn't retain the timer, which the runloop is about
+                // to release. Null it before finishBackgroundFetch can message a freed pointer.
+                s_backgroundFetchSafetyTimer = nil;
+                if (s_pendingCompletions != nil && s_pendingCompletions.count > 0) {
+                    if (auto* inst = PushNotificationIOS::instance()) {
+                        inst->finishBackgroundFetch(true);
+                    }
+                }
+            }];
+    });
+}
+
+void PushNotificationIOS::enqueueBackgroundCompletion(void* handler)
+{
+    if (handler == nullptr) {
+        return;
+    }
+
+    // Copy the stack-allocated block so it survives until drained.
+    void (^completion)(UIBackgroundFetchResult) = [(__bridge void (^)(UIBackgroundFetchResult))handler copy];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_pendingCompletions == nil) {
+            s_pendingCompletions = [[NSMutableArray alloc] init];
+        }
+        [s_pendingCompletions addObject:completion];
+    });
+}
+
+void PushNotificationIOS::finishBackgroundFetch(bool hadNewData)
+{
+    // Drain on the main queue (single-threaded access to array/timer).
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (s_backgroundFetchSafetyTimer != nil) {
+            [s_backgroundFetchSafetyTimer invalidate];
+            s_backgroundFetchSafetyTimer = nil;
+        }
+
+        if (s_pendingCompletions == nil || s_pendingCompletions.count == 0) {
+            return;
+        }
+
+        // Snapshot then clear so re-entrant calls (or a late timer) see an empty queue.
+        NSArray* completions = [s_pendingCompletions copy];
+        [s_pendingCompletions removeAllObjects];
+
+        const UIBackgroundFetchResult result =
+            hadNewData ? UIBackgroundFetchResultNewData : UIBackgroundFetchResultNoData;
+
+        for (id obj in completions) {
+            void (^completion)(UIBackgroundFetchResult) = (void (^)(UIBackgroundFetchResult))obj;
+            completion(result);
+        }
+    });
 }
 
 #endif // Q_OS_IOS
