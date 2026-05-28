@@ -22,6 +22,34 @@ static NSMutableArray* s_pendingCompletions = nil;
 static NSTimer* s_backgroundFetchSafetyTimer = nil;
 static const NSTimeInterval kBackgroundFetchSafetyInterval = 25.0;
 
+// Schemes we allow QDesktopServices::openUrl to receive from a notification payload:
+// any scheme the host app has registered via CFBundleURLTypes, plus https (universal
+// links). Defence-in-depth — without this, a deepLink with e.g. `tel:` or
+// `http://attacker/…` would otherwise be opened by iOS without app involvement.
+static NSSet<NSString*>* allowedNotificationUrlSchemes()
+{
+    static NSSet<NSString*>* s_allowed = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSMutableSet<NSString*>* set = [NSMutableSet new];
+        [set addObject:@"https"];
+        id urlTypes = [NSBundle mainBundle].infoDictionary[@"CFBundleURLTypes"];
+        if ([urlTypes isKindOfClass:[NSArray class]]) {
+            for (id type in (NSArray*)urlTypes) {
+                if (![type isKindOfClass:[NSDictionary class]]) continue;
+                id schemes = ((NSDictionary*)type)[@"CFBundleURLSchemes"];
+                if (![schemes isKindOfClass:[NSArray class]]) continue;
+                for (id scheme in (NSArray*)schemes) {
+                    if ([scheme isKindOfClass:[NSString class]])
+                        [set addObject:[(NSString*)scheme lowercaseString]];
+                }
+            }
+        }
+        s_allowed = [set copy];
+    });
+    return s_allowed;
+}
+
 // Notification-center delegate: forwards userInfo[deepLink] to QDesktopServices::openUrl().
 @interface StatusUNDelegate : NSObject <UNUserNotificationCenterDelegate>
 @end
@@ -43,10 +71,19 @@ static const NSTimeInterval kBackgroundFetchSafetyInterval = 25.0;
             }
         }
         if ([deepLink isKindOfClass:[NSString class]] && [(NSString*)deepLink length] > 0) {
-            const QString link = QString::fromNSString((NSString*)deepLink);
-            QMetaObject::invokeMethod(qApp, [link]() {
-                QDesktopServices::openUrl(QUrl(link));
-            }, Qt::QueuedConnection);
+            // Only route URLs whose scheme the host app registered (plus https). And in
+            // case iOS delivers the response before Qt's main() constructs the app, skip
+            // routing rather than crash on a null qApp.
+            NSURL* url = [NSURL URLWithString:(NSString*)deepLink];
+            NSString* scheme = url.scheme.lowercaseString;
+            if (scheme.length > 0 && [allowedNotificationUrlSchemes() containsObject:scheme]) {
+                if (auto* app = QCoreApplication::instance()) {
+                    const QString link = QString::fromNSString((NSString*)deepLink);
+                    QMetaObject::invokeMethod(app, [link]() {
+                        QDesktopServices::openUrl(QUrl(link));
+                    }, Qt::QueuedConnection);
+                }
+            }
         }
     }
     completionHandler();

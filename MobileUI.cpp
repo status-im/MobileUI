@@ -62,11 +62,12 @@ void MobileUI::registerQML()
             Q_UNUSED(scriptEngine)
             return new MobileUI();
         });
-    qmlRegisterSingletonType<PushNotifications>("MobileUI", 1, 0, "PushNotifications",
-        [](QQmlEngine*, QJSEngine*) -> QObject* {
-            static PushNotifications* instance = new PushNotifications();
-            return instance;
-        });
+    // Construct the C++ singleton eagerly (at registerQML() time, i.e. app startup)
+    // rather than via the QML factory's lazy callback. The lazy form would only fire
+    // on the first QML import of MobileUI
+    static PushNotifications* pushNotifications = new PushNotifications();
+    qmlRegisterSingletonInstance<PushNotifications>("MobileUI", 1, 0, "PushNotifications",
+        pushNotifications);
 }
 
 /* ************************************************************************** */
