@@ -87,16 +87,26 @@ void mobileui_initIOSAppDelegateCategory()
       didReceiveRemoteNotification:(NSDictionary *)userInfo
             fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler
 {
+    // One-shot wrapper so the completion handler is invoked at most once, even if both
+    // we and the original implementation try to complete it.
+    __block BOOL completed = NO;
+    void (^once)(UIBackgroundFetchResult) = ^(UIBackgroundFetchResult result) {
+        if (!completed) { completed = YES; completionHandler(result); }
+    };
+
     // Foreground: complete immediately; no wake plumbing needed.
     if (application.applicationState == UIApplicationStateActive) {
-        completionHandler(UIBackgroundFetchResultNoData);
+        once(UIBackgroundFetchResultNoData);
+        if (s_hasOriginalReceiveMethod) {
+            [self mobileUISwizzled_application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:once];
+        }
         return;
     }
 
-    PushNotificationIOS::instance()->enqueueBackgroundCompletion((__bridge void*)completionHandler);
+    PushNotificationIOS::instance()->enqueueBackgroundCompletion((__bridge void*)once);
     PushNotificationIOS::instance()->onRemoteNotificationReceived();
     if (s_hasOriginalReceiveMethod) {
-        [self mobileUISwizzled_application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:completionHandler];
+        [self mobileUISwizzled_application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:once];
     }
 }
 
