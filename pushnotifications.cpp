@@ -27,6 +27,10 @@ PushNotifications::PushNotifications(QObject* parent)
             &PushNotificationIOS::tokenReceived,
             this,
             [this](const QString& token) { setToken(token); });
+    connect(PushNotificationIOS::instance(),
+            &PushNotificationIOS::remoteNotificationReceived,
+            this,
+            [this]() { emit remoteNotificationReceived(); });
 #endif
 
     if (qApp) {
@@ -105,6 +109,15 @@ void PushNotifications::clearNotifications(const QString& identifier)
     PushNotificationIOS::instance()->clearNotifications(identifier);
 #else
     Q_UNUSED(identifier);
+#endif
+}
+
+void PushNotifications::finishBackgroundFetch(bool hadNewData)
+{
+#if defined(Q_OS_IOS)
+    PushNotificationIOS::instance()->finishBackgroundFetch(hadNewData);
+#else
+    Q_UNUSED(hadNewData);
 #endif
 }
 
